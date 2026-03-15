@@ -25,10 +25,12 @@ export default function App() {
 
   const audioCtxRef = useRef<AudioContext | null>(null);
   const nextPlayTimeRef = useRef<number>(0);
+  const audioQueueRef = useRef<ArrayBuffer[]>([]);
+  const audioProcessingRef = useRef<boolean>(false);
 
   const getAudioCtx = useCallback(() => {
     if (!audioCtxRef.current) {
-      audioCtxRef.current = new AudioContext();
+      audioCtxRef.current = new AudioContext({ sampleRate: 24000 });
     }
     if (audioCtxRef.current.state === "suspended") {
       audioCtxRef.current.resume();
@@ -39,27 +41,33 @@ export default function App() {
   // Called on button click to satisfy browser autoplay policy
   const unlockAudio = useCallback(() => { getAudioCtx(); }, [getAudioCtx]);
 
-  const playAudioChunk = useCallback(async (data: ArrayBuffer) => {
-    if (data.byteLength === 0) return;
+  const processAudioQueue = useCallback(async () => {
+    if (audioProcessingRef.current) return;
+    audioProcessingRef.current = true;
     const ctx = getAudioCtx();
-
-    try {
-      // Wrap raw PCM int16 LE 24kHz in a WAV container so decodeAudioData handles it
-      const wav = pcmToWav(data, 24000);
-      const audioBuffer = await ctx.decodeAudioData(wav);
-
-      const source = ctx.createBufferSource();
-      source.buffer = audioBuffer;
-      source.connect(ctx.destination);
-
-      // Schedule gaplessly after previous chunk
-      const startAt = Math.max(ctx.currentTime + 0.05, nextPlayTimeRef.current);
-      source.start(startAt);
-      nextPlayTimeRef.current = startAt + audioBuffer.duration;
-    } catch (e) {
-      console.error("[Audio] decode failed:", e);
+    while (audioQueueRef.current.length > 0) {
+      const data = audioQueueRef.current.shift()!;
+      try {
+        const wav = pcmToWav(data, 24000);
+        const audioBuffer = await ctx.decodeAudioData(wav);
+        const source = ctx.createBufferSource();
+        source.buffer = audioBuffer;
+        source.connect(ctx.destination);
+        const startAt = Math.max(ctx.currentTime + 0.02, nextPlayTimeRef.current);
+        source.start(startAt);
+        nextPlayTimeRef.current = startAt + audioBuffer.duration;
+      } catch (e) {
+        console.error("[Audio] decode failed:", e);
+      }
     }
+    audioProcessingRef.current = false;
   }, [getAudioCtx]);
+
+  const playAudioChunk = useCallback((data: ArrayBuffer) => {
+    if (data.byteLength === 0) return;
+    audioQueueRef.current.push(data);
+    processAudioQueue();
+  }, [processAudioQueue]);
 
   const { status, lastText, overlays, error, connect, disconnect, sendAudio, sendVideoFrame, sendText, interrupt } =
     useGeminiLive(playAudioChunk);
