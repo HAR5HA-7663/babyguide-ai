@@ -130,7 +130,7 @@ class GeminiLiveClient:
         # Vision: latest JPEG frame + flag indicating it hasn't been analyzed yet
         self._latest_frame: Optional[bytes] = None
         self._frame_fresh: bool = False
-        self._vision_interval: int = 5        # seconds between analyses
+        self._vision_interval: int = 3        # seconds between analyses
         self._last_injected: str = ""         # last description that was injected
         self._injection_cooldown: int = 20    # seconds to wait after an injection
 
@@ -193,7 +193,7 @@ class GeminiLiveClient:
             system_instruction=self.system_prompt,
             speech_config=types.SpeechConfig(
                 voice_config=types.VoiceConfig(
-                    prebuilt_voice_config=types.PrebuiltVoiceConfig(voice_name="Aoede")
+                    prebuilt_voice_config=types.PrebuiltVoiceConfig(voice_name="Charon")
                 )
             ),
         )
@@ -331,8 +331,12 @@ class GeminiLiveClient:
 
         logger.info("Vision loop started")
 
+        first_run = True
         while self._connected:
-            await asyncio.sleep(self._vision_interval)
+            # Skip sleep on first iteration — analyze as soon as a frame arrives
+            if not first_run:
+                await asyncio.sleep(self._vision_interval)
+            first_run = False
 
             if not self._connected:
                 break
