@@ -52,6 +52,23 @@ Gemini is instructed to always return two things: a voice response and a JSON bl
 
 ---
 
+## Testing the live demo
+
+The fastest way to test — no setup needed:
+
+1. Go to **[https://babyguide-ai.vercel.app](https://babyguide-ai.vercel.app)**
+2. Enter a baby name and age (any values work — e.g. "Test Baby", 12 weeks)
+3. Click **Start Session** and allow camera + microphone access
+4. Point your camera at any of these and ask a question:
+   - A medicine bottle or cream → *"Is this safe for a 3-month-old?"*
+   - Formula can → *"How do I prepare this?"*
+   - A blanket → *"Can you walk me through swaddling?"*
+5. The AI will respond with voice and draw AR overlays on the camera feed
+
+**Works best on Chrome (desktop or mobile).** On mobile, use the Scenarios button for quick prompts.
+
+---
+
 ## Run it locally
 
 ### What you need first
