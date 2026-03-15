@@ -220,7 +220,7 @@ export default function App() {
           </div>
 
           {/* Controls bar */}
-          <div className="flex items-center gap-2 shrink-0">
+          <div className="flex items-center gap-2 shrink-0 flex-wrap">
 
             {/* Mic */}
             <ControlButton
@@ -291,24 +291,45 @@ export default function App() {
           </div>
         </div>
 
-        {/* Scenarios sidebar */}
+        {/* Scenarios — sidebar on desktop, bottom sheet on mobile */}
         <AnimatePresence>
           {showScenarios && (
-            <motion.aside
-              initial={{ width: 0, opacity: 0 }}
-              animate={{ width: 240, opacity: 1 }}
-              exit={{ width: 0, opacity: 0 }}
-              transition={{ duration: 0.3, ease: [0.16, 1, 0.3, 1] }}
-              className="shrink-0 overflow-hidden"
-              style={{ borderLeft: "1px solid rgba(255,255,255,0.05)" }}
-            >
-              <div className="w-60 h-full p-4" style={{ background: "var(--navy)" }}>
-                <QuickActions
-                  onSelect={handleScenario}
-                  disabled={!isConnected}
-                />
-              </div>
-            </motion.aside>
+            <>
+              {/* Mobile bottom sheet */}
+              <motion.div
+                initial={{ y: "100%" }}
+                animate={{ y: 0 }}
+                exit={{ y: "100%" }}
+                transition={{ duration: 0.3, ease: [0.16, 1, 0.3, 1] }}
+                className="md:hidden fixed bottom-0 left-0 right-0 z-50 rounded-t-2xl p-4 pb-8"
+                style={{ background: "var(--navy)", borderTop: "1px solid rgba(255,255,255,0.08)", maxHeight: "60vh", overflowY: "auto" }}
+              >
+                <div className="w-10 h-1 rounded-full mx-auto mb-4" style={{ background: "rgba(255,255,255,0.15)" }} />
+                <QuickActions onSelect={handleScenario} disabled={!isConnected} />
+              </motion.div>
+              {/* Mobile backdrop */}
+              <motion.div
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                exit={{ opacity: 0 }}
+                className="md:hidden fixed inset-0 z-40"
+                style={{ background: "rgba(0,0,0,0.5)" }}
+                onClick={() => setShowScenarios(false)}
+              />
+              {/* Desktop sidebar */}
+              <motion.aside
+                initial={{ width: 0, opacity: 0 }}
+                animate={{ width: 240, opacity: 1 }}
+                exit={{ width: 0, opacity: 0 }}
+                transition={{ duration: 0.3, ease: [0.16, 1, 0.3, 1] }}
+                className="hidden md:block shrink-0 overflow-hidden"
+                style={{ borderLeft: "1px solid rgba(255,255,255,0.05)" }}
+              >
+                <div className="w-60 h-full p-4" style={{ background: "var(--navy)" }}>
+                  <QuickActions onSelect={handleScenario} disabled={!isConnected} />
+                </div>
+              </motion.aside>
+            </>
           )}
         </AnimatePresence>
       </div>
