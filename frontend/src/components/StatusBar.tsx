@@ -1,9 +1,4 @@
-/**
- * StatusBar — Connection status and audio level indicator.
- */
-
 import { motion, AnimatePresence } from "framer-motion";
-import { Wifi, WifiOff, Mic, Volume2, AlertCircle, CheckCircle } from "lucide-react";
 import { ConnectionStatus } from "../types";
 import { AudioWaveform } from "./VoiceInput";
 
@@ -11,63 +6,63 @@ interface Props {
   status: ConnectionStatus;
   babyName: string;
   lastText: string;
+  micLevel?: number;
 }
 
-const STATUS_CONFIG: Record<
-  ConnectionStatus,
-  { label: string; color: string; Icon: React.ComponentType<{ className?: string }> }
-> = {
-  idle:         { label: "Ready",        color: "text-slate-400", Icon: WifiOff },
-  connecting:   { label: "Connecting…",  color: "text-yellow-400", Icon: Wifi },
-  ready:        { label: "Connected",    color: "text-green-400", Icon: CheckCircle },
-  listening:    { label: "Listening…",   color: "text-blue-400", Icon: Mic },
-  speaking:     { label: "BabyGuide speaking…", color: "text-purple-400", Icon: Volume2 },
-  error:        { label: "Error",        color: "text-red-400", Icon: AlertCircle },
-  disconnected: { label: "Disconnected", color: "text-slate-500", Icon: WifiOff },
+const STATUS_META: Record<ConnectionStatus, { label: string; dot: string }> = {
+  idle:         { label: "Ready",              dot: "var(--muted)" },
+  connecting:   { label: "Connecting…",        dot: "var(--amber)" },
+  ready:        { label: "Connected",          dot: "var(--teal)" },
+  listening:    { label: "Listening",          dot: "var(--teal)" },
+  speaking:     { label: "Speaking",           dot: "var(--amber)" },
+  error:        { label: "Connection error",   dot: "var(--coral)" },
+  disconnected: { label: "Disconnected",       dot: "var(--muted)" },
 };
 
-export function StatusBar({ status, babyName, lastText }: Props) {
-  const config = STATUS_CONFIG[status];
-  const Icon = config.Icon;
+export function StatusBar({ status, babyName, lastText, micLevel = 0 }: Props) {
+  const meta = STATUS_META[status];
 
   return (
-    <div className="flex flex-col gap-3">
+    <div className="flex flex-col gap-2">
       {/* Status row */}
-      <div className="flex items-center gap-3 px-4 py-2.5 bg-slate-800/60 rounded-xl border border-slate-700/40">
-        <Icon className={`w-4 h-4 ${config.color} shrink-0`} />
-        <span className={`text-sm font-medium ${config.color}`}>{config.label}</span>
+      <div className="flex items-center gap-2.5 px-3 py-2 rounded-xl"
+        style={{ background: "var(--navy-mid)", border: "1px solid rgba(255,255,255,0.05)" }}>
+
+        <div className="w-2 h-2 rounded-full shrink-0"
+          style={{ background: meta.dot,
+            boxShadow: status === "listening" || status === "ready"
+              ? `0 0 6px ${meta.dot}` : "none" }} />
+
+        <span className="text-xs font-medium" style={{ color: "var(--muted-light)" }}>
+          {meta.label}
+        </span>
 
         {status === "listening" && (
-          <div className="ml-auto">
-            <AudioWaveform isActive={true} />
-          </div>
-        )}
-
-        {status === "speaking" && (
-          <div className="ml-auto flex gap-1 items-center">
-            <Volume2 className="w-4 h-4 text-purple-400 animate-pulse" />
-          </div>
+          <div className="ml-1"><AudioWaveform isActive={true} micLevel={micLevel} /></div>
         )}
 
         {babyName && (
-          <span className="ml-auto text-xs text-slate-500">
-            Helping with <span className="text-green-400">{babyName}</span>
+          <span className="ml-auto text-xs" style={{ color: "var(--muted)" }}>
+            {babyName}
           </span>
         )}
       </div>
 
-      {/* Last AI response */}
+      {/* Last response text */}
       <AnimatePresence mode="wait">
         {lastText && (
           <motion.div
-            key={lastText.slice(0, 20)}
-            initial={{ opacity: 0, y: 8 }}
+            key={lastText.slice(0, 30)}
+            initial={{ opacity: 0, y: 4 }}
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0 }}
-            transition={{ duration: 0.3 }}
-            className="px-4 py-3 bg-slate-800/40 rounded-xl border border-slate-700/30"
+            transition={{ duration: 0.25 }}
+            className="px-3 py-2.5 rounded-xl"
+            style={{ background: "var(--navy-mid)", border: "1px solid rgba(255,255,255,0.04)" }}
           >
-            <p className="text-sm text-slate-300 leading-relaxed">{lastText}</p>
+            <p className="text-xs leading-relaxed" style={{ color: "var(--muted-light)" }}>
+              {lastText}
+            </p>
           </motion.div>
         )}
       </AnimatePresence>

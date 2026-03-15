@@ -1,11 +1,5 @@
-/**
- * BabyGuide AI — Main App
- * Orchestrates: onboarding → session creation → live guidance
- */
-
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useRef, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { Mic, MicOff, Camera, CameraOff, Zap, StopCircle, RefreshCw } from "lucide-react";
 
 import { BabyProfile } from "./types";
 import { Onboarding } from "./components/Onboarding";
@@ -15,10 +9,9 @@ import { QuickActions } from "./components/QuickActions";
 import { useGeminiLive } from "./hooks/useGeminiLive";
 import { useVoiceInput } from "./components/VoiceInput";
 
-const BACKEND_URL =
-  import.meta.env.VITE_BACKEND_URL ?? "http://localhost:8080";
+const BACKEND_URL = import.meta.env.VITE_BACKEND_URL ?? "http://localhost:8080";
 
-type AppState = "onboarding" | "session" | "error";
+type AppState = "onboarding" | "session";
 
 export default function App() {
   const [appState, setAppState] = useState<AppState>("onboarding");
@@ -27,65 +20,81 @@ export default function App() {
   const [micOn, setMicOn] = useState(false);
   const [cameraOn, setCameraOn] = useState(false);
   const [setupError, setSetupError] = useState<string | null>(null);
+  const [sessionLoading, setSessionLoading] = useState(false);
+  const [showScenarios, setShowScenarios] = useState(false);
 
-  // Audio output (play Gemini speech)
   const audioCtxRef = useRef<AudioContext | null>(null);
+  const nextPlayTimeRef = useRef<number>(0);
 
-  const playAudioChunk = useCallback((data: ArrayBuffer) => {
+  const getAudioCtx = useCallback(() => {
     if (!audioCtxRef.current) {
-      audioCtxRef.current = new AudioContext({ sampleRate: 24000 });
+      audioCtxRef.current = new AudioContext();
     }
-    const ctx = audioCtxRef.current;
-    // data is raw PCM int16, 24kHz mono
-    const int16 = new Int16Array(data);
-    const float32 = new Float32Array(int16.length);
-    for (let i = 0; i < int16.length; i++) {
-      float32[i] = int16[i] / 0x7fff;
+    if (audioCtxRef.current.state === "suspended") {
+      audioCtxRef.current.resume();
     }
-    const buffer = ctx.createBuffer(1, float32.length, 24000);
-    buffer.copyToChannel(float32, 0);
-    const source = ctx.createBufferSource();
-    source.buffer = buffer;
-    source.connect(ctx.destination);
-    source.start();
+    return audioCtxRef.current;
   }, []);
+
+  // Called on button click to satisfy browser autoplay policy
+  const unlockAudio = useCallback(() => { getAudioCtx(); }, [getAudioCtx]);
+
+  const playAudioChunk = useCallback(async (data: ArrayBuffer) => {
+    if (data.byteLength === 0) return;
+    const ctx = getAudioCtx();
+
+    try {
+      // Wrap raw PCM int16 LE 24kHz in a WAV container so decodeAudioData handles it
+      const wav = pcmToWav(data, 24000);
+      const audioBuffer = await ctx.decodeAudioData(wav);
+
+      const source = ctx.createBufferSource();
+      source.buffer = audioBuffer;
+      source.connect(ctx.destination);
+
+      // Schedule gaplessly after previous chunk
+      const startAt = Math.max(ctx.currentTime + 0.05, nextPlayTimeRef.current);
+      source.start(startAt);
+      nextPlayTimeRef.current = startAt + audioBuffer.duration;
+    } catch (e) {
+      console.error("[Audio] decode failed:", e);
+    }
+  }, [getAudioCtx]);
 
   const { status, lastText, overlays, error, connect, disconnect, sendAudio, sendVideoFrame, sendText, interrupt } =
     useGeminiLive(playAudioChunk);
 
-  // Voice input
-  const { isCapturing } = useVoiceInput({
+  const { micLevel } = useVoiceInput({
     isActive: micOn && appState === "session",
     onAudioChunk: sendAudio,
     onInterrupt: interrupt,
   });
 
-  // ─── Onboarding complete ───────────────────────────────────────────────────
-
   const handleOnboardingComplete = useCallback(async (p: BabyProfile) => {
+    unlockAudio();
     setProfile(p);
     setSetupError(null);
-
+    setSessionLoading(true);
     try {
       const res = await fetch(`${BACKEND_URL}/api/session/create`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(p),
       });
-
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      if (!res.ok) throw new Error(`Server error ${res.status}`);
       const { session_id } = await res.json();
       setSessionId(session_id);
       setAppState("session");
-      // Auto-connect WebSocket
+      setCameraOn(true);
+      setMicOn(true);
       connect(session_id);
     } catch (err) {
-      console.error("Session creation failed:", err);
-      setSetupError("Failed to connect to BabyGuide backend. Is the server running?");
+      const msg = err instanceof Error ? err.message : String(err);
+      setSetupError(`Can't reach backend: ${msg}. Is it running on port 8080?`);
+    } finally {
+      setSessionLoading(false);
     }
   }, [connect]);
-
-  // ─── Start/stop session ────────────────────────────────────────────────────
 
   const handleStop = useCallback(() => {
     disconnect();
@@ -96,156 +105,289 @@ export default function App() {
     setAppState("onboarding");
   }, [disconnect]);
 
-  // ─── Quick scenario ────────────────────────────────────────────────────────
-
-  const handleScenario = useCallback(
-    (prompt: string) => {
-      if (status !== "ready" && status !== "listening" && status !== "speaking") return;
-      sendText(prompt);
-      // Auto-enable camera and mic if not already
-      setCameraOn(true);
-      setMicOn(true);
-    },
-    [status, sendText]
-  );
-
-  // ─── Interrupt on mic tap while AI speaking ────────────────────────────────
+  const handleScenario = useCallback((prompt: string) => {
+    sendText(prompt);
+    setCameraOn(true);
+    setMicOn(true);
+    setShowScenarios(false);
+  }, [sendText]);
 
   const handleMicToggle = useCallback(() => {
     if (status === "speaking") {
       interrupt();
+      nextPlayTimeRef.current = 0;
     }
-    setMicOn((prev) => !prev);
-  }, [status, interrupt]);
-
-  // ─── Reconnect on error ────────────────────────────────────────────────────
+    setMicOn(p => !p);
+    unlockAudio(); // every button press re-confirms user gesture
+  }, [status, interrupt, unlockAudio]);
 
   const handleReconnect = useCallback(() => {
-    if (!sessionId) return;
-    connect(sessionId);
+    if (sessionId) connect(sessionId);
   }, [sessionId, connect]);
-
-  // ─── Render ────────────────────────────────────────────────────────────────
 
   if (appState === "onboarding") {
     return (
       <>
-        <Onboarding onComplete={handleOnboardingComplete} />
-        {setupError && (
-          <div className="fixed bottom-6 left-1/2 -translate-x-1/2 bg-red-900/90 border border-red-700 text-red-200 text-sm px-5 py-3 rounded-xl max-w-sm text-center">
-            {setupError}
-          </div>
-        )}
+        <Onboarding
+          onComplete={handleOnboardingComplete}
+          isLoading={sessionLoading}
+          error={setupError}
+        />
       </>
     );
   }
 
+  const isConnected = status === "ready" || status === "listening" || status === "speaking";
+
   return (
-    <div className="min-h-screen bg-slate-900 flex flex-col">
-      {/* Header */}
-      <header className="flex items-center justify-between px-4 py-3 border-b border-slate-800">
-        <div className="flex items-center gap-2">
-          <Zap className="w-5 h-5 text-green-400" />
-          <span className="font-bold text-white text-sm">BabyGuide AI</span>
-        </div>
-        {profile && (
-          <span className="text-xs text-slate-400">
-            {profile.baby_name} · {Math.floor(profile.age_weeks / 4)}mo
-          </span>
-        )}
-        <button
-          onClick={handleStop}
-          className="flex items-center gap-1.5 text-xs text-red-400 hover:text-red-300 transition"
-        >
-          <StopCircle className="w-4 h-4" />
-          End
-        </button>
-      </header>
+    <div className="relative flex h-screen overflow-hidden" style={{ background: "var(--night)" }}>
 
-      {/* Main content */}
-      <main className="flex-1 flex flex-col md:flex-row gap-4 p-4 overflow-auto">
-        {/* Left: Video + controls */}
-        <div className="flex flex-col gap-4 flex-1 min-w-0">
-          <VideoFeed
-            overlays={overlays}
-            isActive={cameraOn}
-            onFrame={sendVideoFrame}
-          />
+      {/* Subtle ambient orb */}
+      <div className="bg-orb w-[600px] h-[600px] opacity-40"
+        style={{ background: "radial-gradient(circle, rgba(93,237,228,0.05), transparent 70%)",
+          top: "50%", left: "50%", transform: "translate(-50%,-50%)" }} />
 
-          {/* Controls */}
-          <div className="flex items-center justify-center gap-4">
-            {/* Mic button */}
-            <motion.button
-              whileTap={{ scale: 0.92 }}
+      {/* ── Main layout: camera left, sidebar right ── */}
+      <div className="relative z-10 flex flex-1 overflow-hidden">
+
+        {/* Camera column */}
+        <div className="flex flex-col flex-1 p-4 gap-3 min-w-0">
+
+          {/* Header */}
+          <div className="flex items-center justify-between shrink-0">
+            <div className="flex items-center gap-2.5">
+              {/* Moon logo */}
+              <div className="relative w-7 h-7 rounded-full shrink-0"
+                style={{ background: "radial-gradient(circle at 35% 35%, var(--teal), #1A2B47)",
+                  boxShadow: "0 0 12px rgba(93,237,228,0.25)" }}>
+                <div className="absolute top-0.5 right-0.5 rounded-full w-4 h-4"
+                  style={{ background: "var(--night)" }} />
+              </div>
+              <span className="font-display text-base font-light" style={{ color: "var(--cream)" }}>
+                BabyGuide
+              </span>
+              <span className="text-[10px] px-1.5 py-0.5 rounded-md font-mono"
+                style={{ background: "rgba(93,237,228,0.08)", color: "var(--teal)",
+                  border: "1px solid rgba(93,237,228,0.2)" }}>
+                gemini-2.5-flash
+              </span>
+            </div>
+
+            <div className="flex items-center gap-3">
+              {profile && (
+                <span className="text-xs" style={{ color: "var(--muted)" }}>
+                  {profile.baby_name} · {ageLabel(profile.age_weeks)}
+                </span>
+              )}
+              <button
+                onClick={handleStop}
+                className="text-xs px-3 py-1.5 rounded-xl transition"
+                style={{ color: "var(--muted-light)", background: "var(--navy-mid)",
+                  border: "1px solid rgba(255,255,255,0.05)" }}
+              >
+                End
+              </button>
+            </div>
+          </div>
+
+          {/* Camera — fills available space, capped so controls stay visible */}
+          <div
+            className="flex-1 min-h-0 rounded-2xl overflow-hidden transition-all duration-500"
+            style={{ maxHeight: "calc(100vh - 160px)", border: "1px solid rgba(93,237,228,0.1)",
+              boxShadow: cameraOn
+                ? "0 0 0 1px rgba(93,237,228,0.15), 0 0 60px rgba(93,237,228,0.08)"
+                : "0 0 0 1px rgba(93,237,228,0.05)" }}
+          >
+            <VideoFeed overlays={overlays} isActive={cameraOn} onFrame={sendVideoFrame} />
+          </div>
+
+          {/* Status */}
+          <div className="shrink-0">
+            <StatusBar
+              status={error ? "error" : status}
+              babyName={profile?.baby_name ?? ""}
+              lastText={error ?? lastText}
+              micLevel={micLevel}
+            />
+          </div>
+
+          {/* Controls bar */}
+          <div className="flex items-center gap-2 shrink-0">
+
+            {/* Mic */}
+            <ControlButton
+              active={micOn}
               onClick={handleMicToggle}
-              className={`flex items-center gap-2 px-5 py-3 rounded-xl font-medium text-sm transition-all ${
-                micOn
-                  ? "bg-green-500/20 border border-green-500/50 text-green-400"
-                  : "bg-slate-800 border border-slate-700 text-slate-400 hover:border-slate-600"
-              }`}
-            >
-              {micOn ? <Mic className="w-4 h-4" /> : <MicOff className="w-4 h-4" />}
-              {micOn ? "Mic On" : "Mic Off"}
-            </motion.button>
+              activeColor="var(--teal)"
+              label={micOn ? "Mic on" : "Mic off"}
+              icon={micOn
+                ? <MicIcon color="var(--teal)" />
+                : <MicOffIcon color="var(--muted-light)" />}
+            />
 
-            {/* Camera button */}
-            <motion.button
-              whileTap={{ scale: 0.92 }}
-              onClick={() => setCameraOn((p) => !p)}
-              className={`flex items-center gap-2 px-5 py-3 rounded-xl font-medium text-sm transition-all ${
-                cameraOn
-                  ? "bg-blue-500/20 border border-blue-500/50 text-blue-400"
-                  : "bg-slate-800 border border-slate-700 text-slate-400 hover:border-slate-600"
-              }`}
-            >
-              {cameraOn ? <Camera className="w-4 h-4" /> : <CameraOff className="w-4 h-4" />}
-              {cameraOn ? "Camera On" : "Camera Off"}
-            </motion.button>
+            {/* Camera */}
+            <ControlButton
+              active={cameraOn}
+              onClick={() => setCameraOn(p => !p)}
+              activeColor="var(--teal)"
+              label={cameraOn ? "Camera on" : "Camera off"}
+              icon={cameraOn
+                ? <CamIcon color="var(--teal)" />
+                : <CamOffIcon color="var(--muted-light)" />}
+            />
 
-            {/* Interrupt button — only shown when AI is speaking */}
+            {/* Scenarios toggle */}
+            <button
+              onClick={() => setShowScenarios(p => !p)}
+              className="ml-auto flex items-center gap-2 px-4 py-2.5 rounded-xl text-xs font-medium transition"
+              style={{
+                background: showScenarios ? "rgba(93,237,228,0.12)" : "var(--navy-mid)",
+                border: `1px solid ${showScenarios ? "rgba(93,237,228,0.3)" : "rgba(255,255,255,0.05)"}`,
+                color: showScenarios ? "var(--teal)" : "var(--muted-light)",
+              }}
+            >
+              <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+                <circle cx="7" cy="7" r="6" stroke="currentColor" strokeWidth="1.4"/>
+                <path d="M7 4v3.5L9 9" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round"/>
+              </svg>
+              Scenarios
+            </button>
+
+            {/* Interrupt — only when AI talking */}
             <AnimatePresence>
               {status === "speaking" && (
                 <motion.button
-                  initial={{ opacity: 0, scale: 0.8 }}
+                  initial={{ opacity: 0, scale: 0.85 }}
                   animate={{ opacity: 1, scale: 1 }}
-                  exit={{ opacity: 0, scale: 0.8 }}
-                  whileTap={{ scale: 0.9 }}
-                  onClick={interrupt}
-                  className="px-5 py-3 rounded-xl font-medium text-sm bg-purple-500/20 border border-purple-500/50 text-purple-400"
+                  exit={{ opacity: 0, scale: 0.85 }}
+                  whileTap={{ scale: 0.92 }}
+                  onClick={() => { interrupt(); nextPlayTimeRef.current = 0; }}
+                  className="px-4 py-2.5 rounded-xl text-xs font-medium"
+                  style={{ background: "rgba(245,201,122,0.12)",
+                    border: "1px solid rgba(245,201,122,0.3)", color: "var(--amber)" }}
                 >
                   Interrupt
                 </motion.button>
               )}
             </AnimatePresence>
+
+            {/* Reconnect */}
+            {(status === "error" || status === "disconnected") && (
+              <button onClick={handleReconnect}
+                className="px-4 py-2.5 rounded-xl text-xs font-medium"
+                style={{ background: "var(--navy-mid)", border: "1px solid rgba(255,255,255,0.06)",
+                  color: "var(--muted-light)" }}>
+                Reconnect
+              </button>
+            )}
           </div>
+        </div>
 
-          {/* Status */}
-          <StatusBar
-            status={error ? "error" : status}
-            babyName={profile?.baby_name ?? ""}
-            lastText={error ?? lastText}
-          />
-
-          {/* Reconnect button on error */}
-          {(status === "error" || status === "disconnected") && (
-            <button
-              onClick={handleReconnect}
-              className="flex items-center justify-center gap-2 py-2.5 rounded-xl bg-slate-800 border border-slate-700 text-slate-300 text-sm hover:bg-slate-700 transition"
+        {/* Scenarios sidebar */}
+        <AnimatePresence>
+          {showScenarios && (
+            <motion.aside
+              initial={{ width: 0, opacity: 0 }}
+              animate={{ width: 240, opacity: 1 }}
+              exit={{ width: 0, opacity: 0 }}
+              transition={{ duration: 0.3, ease: [0.16, 1, 0.3, 1] }}
+              className="shrink-0 overflow-hidden"
+              style={{ borderLeft: "1px solid rgba(255,255,255,0.05)" }}
             >
-              <RefreshCw className="w-4 h-4" />
-              Reconnect
-            </button>
+              <div className="w-60 h-full p-4" style={{ background: "var(--navy)" }}>
+                <QuickActions
+                  onSelect={handleScenario}
+                  disabled={!isConnected}
+                />
+              </div>
+            </motion.aside>
           )}
-        </div>
-
-        {/* Right: Quick actions */}
-        <div className="md:w-64 lg:w-72 shrink-0">
-          <QuickActions
-            onSelect={handleScenario}
-            disabled={status === "idle" || status === "connecting" || status === "disconnected"}
-          />
-        </div>
-      </main>
+        </AnimatePresence>
+      </div>
     </div>
   );
 }
+
+// ─── Helpers ──────────────────────────────────────────────────────────────────
+
+function ageLabel(weeks: number) {
+  const m = Math.floor(weeks / 4);
+  return m === 0 ? "newborn" : `${m}mo`;
+}
+
+function ControlButton({ active, onClick, label, icon, activeColor }: {
+  active: boolean; onClick: () => void;
+  label: string; icon: React.ReactNode; activeColor: string;
+}) {
+  return (
+    <motion.button
+      whileTap={{ scale: 0.92 }}
+      onClick={onClick}
+      className="flex items-center gap-2 px-4 py-2.5 rounded-xl text-xs font-medium transition-all"
+      style={{
+        background: active ? `${activeColor}14` : "var(--navy-mid)",
+        border: `1px solid ${active ? `${activeColor}44` : "rgba(255,255,255,0.05)"}`,
+        color: active ? activeColor : "var(--muted-light)",
+      }}
+    >
+      {icon}
+      {label}
+    </motion.button>
+  );
+}
+
+// ─── PCM → WAV wrapper ───────────────────────────────────────────────────────
+// Wrapping raw int16 PCM in a WAV header lets the browser decode it reliably
+// via decodeAudioData instead of us manually converting bytes.
+function pcmToWav(pcmBuffer: ArrayBuffer, sampleRate: number): ArrayBuffer {
+  const pcm = new Uint8Array(pcmBuffer);
+  const wavBuffer = new ArrayBuffer(44 + pcm.byteLength);
+  const view = new DataView(wavBuffer);
+  const write = (offset: number, value: number, bytes: number) => {
+    for (let i = 0; i < bytes; i++) view.setUint8(offset + i, (value >> (8 * i)) & 0xff);
+  };
+  const writeStr = (offset: number, str: string) => {
+    for (let i = 0; i < str.length; i++) view.setUint8(offset + i, str.charCodeAt(i));
+  };
+  writeStr(0, "RIFF");
+  write(4,  36 + pcm.byteLength, 4);
+  writeStr(8, "WAVE");
+  writeStr(12, "fmt ");
+  write(16, 16, 4);           // chunk size
+  write(20, 1,  2);           // PCM format
+  write(22, 1,  2);           // mono
+  write(24, sampleRate, 4);
+  write(28, sampleRate * 2, 4); // byte rate (16-bit mono)
+  write(32, 2,  2);           // block align
+  write(34, 16, 2);           // bits per sample
+  writeStr(36, "data");
+  write(40, pcm.byteLength, 4);
+  new Uint8Array(wavBuffer, 44).set(pcm);
+  return wavBuffer;
+}
+
+// Minimal inline SVG icons
+const MicIcon = ({ color }: { color: string }) => (
+  <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+    <rect x="4.5" y="1" width="5" height="7" rx="2.5" stroke={color} strokeWidth="1.3"/>
+    <path d="M2 7.5A5 5 0 0012 7.5M7 12.5v-2" stroke={color} strokeWidth="1.3" strokeLinecap="round"/>
+  </svg>
+);
+const MicOffIcon = ({ color }: { color: string }) => (
+  <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+    <rect x="4.5" y="1" width="5" height="7" rx="2.5" stroke={color} strokeWidth="1.3"/>
+    <path d="M2 7.5A5 5 0 0012 7.5M7 12.5v-2M2 2l10 10" stroke={color} strokeWidth="1.3" strokeLinecap="round"/>
+  </svg>
+);
+const CamIcon = ({ color }: { color: string }) => (
+  <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+    <path d="M1 4.5h8a1 1 0 011 1v4a1 1 0 01-1 1H1a1 1 0 01-1-1v-4a1 1 0 011-1z" stroke={color} strokeWidth="1.3"/>
+    <path d="M10 6.5l3-2v5l-3-2" stroke={color} strokeWidth="1.3" strokeLinejoin="round"/>
+  </svg>
+);
+const CamOffIcon = ({ color }: { color: string }) => (
+  <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+    <path d="M1 4.5h8a1 1 0 011 1v4a1 1 0 01-1 1H1a1 1 0 01-1-1v-4a1 1 0 011-1z" stroke={color} strokeWidth="1.3"/>
+    <path d="M10 6.5l3-2v5l-3-2M2 2l10 10" stroke={color} strokeWidth="1.3" strokeLinecap="round"/>
+  </svg>
+);

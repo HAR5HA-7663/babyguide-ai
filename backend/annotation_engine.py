@@ -32,11 +32,16 @@ class AnnotationEngine:
             return []
 
     def strip_json_from_text(self, text: str) -> str:
-        """Remove the JSON block from text so only the speech part remains."""
+        """Remove JSON block and internal reasoning leaks from text."""
         clean = _JSON_BLOCK_RE.sub("", text).strip()
-        # Also collapse multiple blank lines
+        # Strip lines that are markdown bold headers — these are reasoning artifacts
+        # e.g. "**Acknowledge Visual Input**" or "**Assessing Context**"
+        clean = re.sub(r"^\*\*[^*]+\*\*\s*", "", clean, flags=re.MULTILINE)
+        # Strip lines starting with internal meta-patterns
+        clean = re.sub(r"^(I need to|The user has|I'm currently|I must|Let me assess)[^\n]*\n?", "", clean, flags=re.MULTILINE | re.IGNORECASE)
+        # Collapse multiple blank lines
         clean = re.sub(r"\n{3,}", "\n\n", clean)
-        return clean
+        return clean.strip()
 
     def _validate_overlays(self, overlays: list) -> list[dict]:
         """Validate and normalise overlay entries."""

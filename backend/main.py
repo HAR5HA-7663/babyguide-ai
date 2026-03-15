@@ -165,8 +165,8 @@ async def _receive_from_client(
                 await gemini_client.send_audio(audio_bytes)
 
             elif msg_type == "video_frame":
-                frame_bytes = base64.b64decode(msg["data"])
-                await gemini_client.send_video_frame(frame_bytes)
+                jpeg_bytes = base64.b64decode(msg["data"])
+                await gemini_client.send_video_frame(jpeg_bytes)
 
             elif msg_type == "text_message":
                 await gemini_client.send_text(msg["text"])
@@ -178,7 +178,7 @@ async def _receive_from_client(
                 break
 
         except Exception as e:
-            logger.error(f"Error processing client message: {e}")
+            logger.warning(f"Skipping message due to error: {e}")
 
 
 async def _send_to_client(

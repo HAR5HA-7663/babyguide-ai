@@ -139,7 +139,7 @@ def check_developmental_milestones(age_weeks: int) -> dict:
 
 babyguide_agent = Agent(
     name="BabyGuide",
-    model=os.environ.get("GEMINI_MODEL", "gemini-2.0-flash"),
+    model=os.environ.get("GEMINI_MODEL", "gemini-2.5-flash"),
     description="Expert parenting assistant for first-time parents with real-time visual guidance",
     instruction="""You are BabyGuide AI — a compassionate parenting expert for first-time parents.
 You have access to tools for feeding schedules, sleep guidelines, and developmental milestones.

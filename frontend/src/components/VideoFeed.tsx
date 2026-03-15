@@ -1,10 +1,4 @@
-/**
- * VideoFeed — WebRTC camera capture with AR overlay canvas.
- * Captures video + sends JPEG frames to backend every 500ms.
- */
-
 import { useEffect, useRef, useState, useCallback } from "react";
-import { Camera, CameraOff } from "lucide-react";
 import { Overlay } from "../types";
 import { AROverlay } from "./AROverlay";
 
@@ -24,18 +18,19 @@ export function VideoFeed({ overlays, isActive, onFrame }: Props) {
   const [cameraReady, setCameraReady] = useState(false);
   const [cameraError, setCameraError] = useState<string | null>(null);
 
-  // Start/stop camera
   useEffect(() => {
     if (!isActive) {
-      streamRef.current?.getTracks().forEach((t) => t.stop());
+      streamRef.current?.getTracks().forEach(t => t.stop());
       streamRef.current = null;
       setCameraReady(false);
       return;
     }
 
-    navigator.mediaDevices
-      .getUserMedia({ video: { facingMode: "environment", width: 640, height: 480 } })
-      .then((stream) => {
+    // Try rear camera first, fall back to any
+    const constraints = { video: { facingMode: "environment", width: 640, height: 480 } };
+    navigator.mediaDevices.getUserMedia(constraints)
+      .catch(() => navigator.mediaDevices.getUserMedia({ video: true }))
+      .then(stream => {
         streamRef.current = stream;
         if (videoRef.current) {
           videoRef.current.srcObject = stream;
@@ -44,37 +39,26 @@ export function VideoFeed({ overlays, isActive, onFrame }: Props) {
         setCameraReady(true);
         setCameraError(null);
       })
-      .catch((err) => {
+      .catch(err => {
         console.error("[VideoFeed] Camera error:", err);
-        setCameraError("Camera access denied");
+        setCameraError(err.name === "NotAllowedError"
+          ? "Camera access denied — click the camera icon in your browser address bar to allow it."
+          : "Camera unavailable");
       });
 
-    return () => {
-      streamRef.current?.getTracks().forEach((t) => t.stop());
-    };
+    return () => { streamRef.current?.getTracks().forEach(t => t.stop()); };
   }, [isActive]);
 
-  // Capture JPEG frames and send to backend
   const captureFrame = useCallback(() => {
     const video = videoRef.current;
     const canvas = canvasCapRef.current;
     if (!video || !canvas || !cameraReady || video.readyState < 2) return;
-
     canvas.width = video.videoWidth || 640;
     canvas.height = video.videoHeight || 480;
-
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
-
     ctx.drawImage(video, 0, 0);
-    canvas.toBlob(
-      (blob) => {
-        if (!blob) return;
-        blob.arrayBuffer().then(onFrame);
-      },
-      "image/jpeg",
-      JPEG_QUALITY
-    );
+    canvas.toBlob(blob => { blob?.arrayBuffer().then(onFrame); }, "image/jpeg", JPEG_QUALITY);
   }, [cameraReady, onFrame]);
 
   useEffect(() => {
@@ -84,55 +68,75 @@ export function VideoFeed({ overlays, isActive, onFrame }: Props) {
   }, [isActive, cameraReady, captureFrame]);
 
   return (
-    <div className="relative w-full aspect-video bg-slate-900 rounded-2xl overflow-hidden">
-      {/* Video element */}
-      <video
-        ref={videoRef}
-        className="w-full h-full object-cover"
-        autoPlay
-        muted
-        playsInline
-      />
+    <div className="relative w-full h-full overflow-hidden rounded-2xl">
+      {/* Flip wrapper — mirrors the display only, capture canvas is unaffected */}
+      <div className="w-full h-full" style={{ transform: "scaleX(-1)" }}>
+        <video
+          ref={videoRef}
+          className="w-full h-full object-contain"
+          style={{ background: "var(--night)" }}
+          autoPlay muted playsInline
+        />
+        {cameraReady && overlays.length > 0 && (
+          <AROverlay overlays={overlays} videoRef={videoRef} />
+        )}
+      </div>
 
-      {/* AR Canvas overlay */}
-      {cameraReady && overlays.length > 0 && (
-        <AROverlay overlays={overlays} videoRef={videoRef} />
-      )}
-
-      {/* Placeholder when camera is off */}
+      {/* Camera off state */}
       {!isActive && (
-        <div className="absolute inset-0 flex flex-col items-center justify-center bg-slate-800/90">
-          <CameraOff className="w-12 h-12 text-slate-500 mb-3" />
-          <p className="text-slate-400 text-sm">Camera is off</p>
+        <div className="absolute inset-0 flex flex-col items-center justify-center"
+          style={{ background: "var(--navy)" }}>
+          <div className="mb-4 opacity-30">
+            <svg width="48" height="48" viewBox="0 0 48 48" fill="none">
+              <path d="M8 16h8l4-6h8l4 6h8a2 2 0 012 2v22a2 2 0 01-2 2H8a2 2 0 01-2-2V18a2 2 0 012-2z"
+                stroke="currentColor" strokeWidth="2" strokeLinejoin="round"/>
+              <circle cx="24" cy="29" r="7" stroke="currentColor" strokeWidth="2"/>
+              <line x1="4" y1="4" x2="44" y2="44" stroke="currentColor" strokeWidth="2" strokeLinecap="round"/>
+            </svg>
+          </div>
+          <p className="text-sm" style={{ color: "var(--muted-light)" }}>Camera off</p>
+          <p className="text-xs mt-1" style={{ color: "var(--muted)" }}>Tap the camera button below</p>
         </div>
       )}
 
-      {/* Camera loading state */}
+      {/* Loading */}
       {isActive && !cameraReady && !cameraError && (
-        <div className="absolute inset-0 flex items-center justify-center bg-slate-900">
-          <div className="flex gap-2 items-center text-slate-400">
-            <Camera className="w-5 h-5 animate-pulse" />
-            <span className="text-sm">Starting camera...</span>
+        <div className="absolute inset-0 flex items-center justify-center"
+          style={{ background: "var(--navy)" }}>
+          <div className="flex flex-col items-center gap-3">
+            <div className="w-8 h-8 rounded-full border-2 border-t-transparent animate-spin"
+              style={{ borderColor: "var(--teal)", borderTopColor: "transparent" }} />
+            <p className="text-sm" style={{ color: "var(--muted-light)" }}>Starting camera…</p>
           </div>
         </div>
       )}
 
-      {/* Camera error */}
+      {/* Error */}
       {cameraError && (
-        <div className="absolute inset-0 flex items-center justify-center bg-slate-900">
-          <p className="text-red-400 text-sm">{cameraError}</p>
+        <div className="absolute inset-0 flex items-center justify-center p-6"
+          style={{ background: "var(--navy)" }}>
+          <div className="text-center">
+            <div className="w-12 h-12 rounded-full mx-auto mb-3 flex items-center justify-center"
+              style={{ background: "rgba(255,123,107,0.15)" }}>
+              <svg width="22" height="22" viewBox="0 0 22 22" fill="none">
+                <circle cx="11" cy="11" r="10" stroke="#FF7B6B" strokeWidth="1.5"/>
+                <path d="M11 7v5M11 15v.5" stroke="#FF7B6B" strokeWidth="1.5" strokeLinecap="round"/>
+              </svg>
+            </div>
+            <p className="text-sm text-center leading-relaxed" style={{ color: "#FF7B6B" }}>{cameraError}</p>
+          </div>
         </div>
       )}
 
-      {/* Live indicator */}
+      {/* Live badge */}
       {cameraReady && isActive && (
-        <div className="absolute top-3 left-3 flex items-center gap-1.5 bg-black/50 rounded-full px-3 py-1">
-          <div className="w-2 h-2 rounded-full bg-red-500 live-dot" />
-          <span className="text-white text-xs font-medium">LIVE</span>
+        <div className="absolute top-3 left-3 flex items-center gap-1.5 px-2.5 py-1 rounded-full"
+          style={{ background: "rgba(7,11,18,0.7)", backdropFilter: "blur(8px)" }}>
+          <div className="w-1.5 h-1.5 rounded-full live-dot" style={{ background: "var(--coral)" }} />
+          <span className="text-xs font-medium tracking-wide" style={{ color: "var(--cream)" }}>LIVE</span>
         </div>
       )}
 
-      {/* Hidden canvas for frame capture */}
       <canvas ref={canvasCapRef} className="hidden" />
     </div>
   );
