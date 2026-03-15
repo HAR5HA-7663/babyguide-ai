@@ -1,5 +1,4 @@
 # Secrets — never commit these
-.env
 *.pem
 *.key
 service-account*.json
@@ -36,3 +35,4 @@ Thumbs.db
 .vscode/
 .idea/
 *.swp
+config.bat
