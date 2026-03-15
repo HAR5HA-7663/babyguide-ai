@@ -148,7 +148,7 @@ export default function App() {
   const isConnected = status === "ready" || status === "listening" || status === "speaking";
 
   return (
-    <div className="relative flex h-screen overflow-hidden" style={{ background: "var(--night)" }}>
+    <div className="relative flex overflow-hidden" style={{ background: "var(--night)", height: "100dvh" }}>
 
       {/* Subtle ambient orb */}
       <div className="bg-orb w-[600px] h-[600px] opacity-40"
@@ -201,7 +201,7 @@ export default function App() {
           {/* Camera — fills available space, capped so controls stay visible */}
           <div
             className="flex-1 min-h-0 rounded-2xl overflow-hidden transition-all duration-500"
-            style={{ maxHeight: "calc(100vh - 160px)", border: "1px solid rgba(93,237,228,0.1)",
+            style={{ maxHeight: "calc(100dvh - 160px)", border: "1px solid rgba(93,237,228,0.1)",
               boxShadow: cameraOn
                 ? "0 0 0 1px rgba(93,237,228,0.15), 0 0 60px rgba(93,237,228,0.08)"
                 : "0 0 0 1px rgba(93,237,228,0.05)" }}
